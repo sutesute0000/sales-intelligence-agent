@@ -50,9 +50,6 @@ signals:
   min_score: 5  # この値未満のシグナルは通知対象から外す
   hot_score: 8  # この値以上のシグナルを重要扱いにする
 
-hypothesis:
-  update_on_no_change: true  # ニュース差分がない日も仮説更新を行う
-
 state:
   db_path: "state.db"  # 前回取得結果を保存するSQLite DB
 

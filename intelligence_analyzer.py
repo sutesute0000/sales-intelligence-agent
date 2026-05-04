@@ -5,7 +5,7 @@ import time
 from google import genai
 
 
-SITE_PROMPT = """\
+RESEARCH_PLAN_PROMPT = """\
 あなたは「{company_self}」{department}の営業インテリジェンスAIです。
 
 【自社の立場】
@@ -35,32 +35,15 @@ SITE_PROMPT = """\
 
 今日のニュースを「前日までの仮説」に照らして解釈し、{company} について以下を行ってください：
 
-1. 営業シグナルを抽出
-2. 仮説更新に市場調査・競合動向・制度動向などの追加調査が必要か判断し、必要な検索クエリを作る
-3. シグナルが薄い日でも、差分ニュースの有無をsummaryに明記する
+1. 今日のニュース差分だけでは不足する背景情報・補足情報を判断する
+2. 市場動向、競合動向、制度動向、関連する過去発表などを調べるための検索クエリを作る
+3. 追加調査が不要な場合は search_queries を空配列にする
 
 以下のJSONのみで回答してください（説明文・コードブロック不要）:
 {{
-  "summary": "今日のニュースの動向概要（2〜3文）",
-  "signals": [
-    {{
-      "topic": "今日検出された具体的な動向（事実ベース、1文）",
-      "relevance_score": 0以上10以下の整数,
-      "relevance_reason": "なぜ自社にとって関連するか（80字以内）",
-      "fit_services": ["関連する自社サービス名（複数可、なければ空配列）"],
-      "approach": "具体的な営業アプローチ案（60〜120字、誰に何をどう聞くか）"
-    }}
-  ],
   "search_queries": ["追加調査用の検索クエリ"],
-  "inferred_concerns": ["この事業者が抱えている可能性が高い課題"]
+  "research_focus": ["追加調査で確認したい観点"]
 }}
-
-relevance_score の基準:
-- 9-10: 即座に提案可能な明確な機会
-- 7-8: 高い可能性
-- 5-6: 注視すべき動向
-- 1-4: 営業機会との関連が薄い
-- 0: 関連なし
 """
 
 
@@ -88,30 +71,46 @@ SITE_HYPOTHESIS_PROMPT = """\
 ### (A) 前日までの営業仮説
 {prev_hypothesis}
 
-### (B) 今日のニュース差分サマリ
-{summary}
+### (B) 今日のニュース差分
+{diff_text}
 
-### (C) 今日抽出した営業シグナル・推定課題
-{signals}
-
-### (D) 追加Web調査結果
+### (C) 背景・補足情報として取得した追加Web調査結果
 {related_research}
 ================================================================
 
 前日までの仮説、今日のニュース差分、必要に応じて実施したWeb調査結果を統合し、
-{company} について最新の営業仮説を更新してください。
+{company} について営業シグナルを抽出し、最新の営業仮説とレポートを作成してください。
 
 更新方針:
 1. 部長・役員級が短時間で状況把握できる、コンサルティングブリーフの文体で書く
 2. 前日までの仮説と矛盾する新情報がある場合は、理由が分かる形で修正する
 3. Web調査結果は、ニュース差分だけでは不足する市場背景・競合動向・制度動向の補強に使う
 4. 事実、解釈、営業示唆を分け、過度に断定せず「仮説」として表現する
-5. 多少長くてもよいが、読み手が次の判断に移れる粒度に整理する
+5. ニュース差分から営業機会が薄い場合は、relevance_score を低くする
+6. 多少長くてもよいが、読み手が次の判断に移れる粒度に整理する
 
 以下のJSONのみで回答してください（説明文・コードブロック不要）:
 {{
+  "summary": "今日のニュース差分と追加調査を踏まえた動向概要（2〜3文）",
+  "signals": [
+    {{
+      "topic": "今日検出された具体的な動向（事実ベース、1文）",
+      "relevance_score": 0以上10以下の整数,
+      "relevance_reason": "なぜ自社にとって関連するか（80字以内）",
+      "fit_services": ["関連する自社サービス名（複数可、なければ空配列）"],
+      "approach": "具体的な営業アプローチ案（60〜120字、誰に何をどう聞くか）"
+    }}
+  ],
+  "inferred_concerns": ["この事業者が抱えている可能性が高い課題"],
   "updated_hypothesis_md": "更新後の仮説ファイル全体のmarkdown内容（後述のテンプレート形式そのまま）"
 }}
+
+relevance_score の基準:
+- 9-10: 即座に提案可能な明確な機会
+- 7-8: 高い可能性
+- 5-6: 注視すべき動向
+- 1-4: 営業機会との関連が薄い
+- 0: 関連なし
 
 updated_hypothesis_md のテンプレート（このまま文字列に格納）:
 
@@ -169,8 +168,8 @@ class Analyzer:
         self.model = config.get("model", "gemini-2.5-flash")
         self.self_context = self_context
 
-    def analyze_site(self, name: str, prev_hypothesis: str, diff_text: str, today: str) -> dict:
-        prompt = SITE_PROMPT.format(
+    def plan_research(self, name: str, prev_hypothesis: str, diff_text: str, today: str) -> dict:
+        prompt = RESEARCH_PLAN_PROMPT.format(
             company_self=self.self_context["company"],
             department=self.self_context["department"],
             role=self.self_context["role"].strip(),
@@ -188,9 +187,7 @@ class Analyzer:
         self,
         name: str,
         prev_hypothesis: str,
-        summary: str,
-        signals: list[dict],
-        concerns: list[str],
+        diff_text: str,
         related: list[dict],
         today: str,
     ) -> dict:
@@ -204,8 +201,7 @@ class Analyzer:
             today=today,
             company=name,
             prev_hypothesis=prev_hypothesis or "（初回のため空）",
-            summary=summary or "（ニュース差分なし）",
-            signals=self._format_signals(signals, concerns),
+            diff_text=diff_text,
             related_research=self._format_research(related),
         )
         return self._call(prompt)

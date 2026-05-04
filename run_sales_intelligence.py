@@ -99,9 +99,6 @@ def run():
     signals_cfg = config.get("signals", {})
     min_score = signals_cfg.get("min_score", 5)
     hot_score = signals_cfg.get("hot_score", 8)
-    hypothesis_cfg = config.get("hypothesis", {})
-    update_on_no_change = hypothesis_cfg.get("update_on_no_change", True)
-
     today = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d")
 
     db = StateDB(config["state"]["db_path"])
@@ -141,10 +138,8 @@ def run():
                 print(f"[main] {name}: 初回取得")
                 diff_text = result.combined_text[:12000]
             elif not diff.has_changes:
-                print(f"[main] {name}: 変化なし")
-                if not update_on_no_change:
-                    continue
-                diff_text = "前回取得から新規・更新ニュースはありません。"
+                print(f"[main] {name}: 変化なし。以降の処理をスキップします")
+                continue
             else:
                 diff_text = diff.added_text
 
@@ -169,7 +164,7 @@ def run():
         print("\n[main] 処理対象なし。完了。")
         return
 
-    # Phase 2: 事業者ごとにGeminiで差分要約・検索要否を判断
+    # Phase 2: 差分から補足検索クエリを作り、検索結果込みで営業仮説を更新
     site_cards = []
     last_gemini_call_at = 0.0
 
@@ -187,18 +182,41 @@ def run():
         name = item["name"]
         url = item["url"]
 
-        print(f"\n[main] {name}: Geminiで差分要約中... (today={today})")
+        print(f"\n[main] {name}: 補足検索クエリを生成中... (today={today})")
         try:
             wait_for_gemini_slot()
-            analysis = analyzer.analyze_site(
+            research_plan = analyzer.plan_research(
                 name=name,
                 prev_hypothesis=item["prev_hypothesis"],
                 diff_text=item["diff_text"],
                 today=today,
             )
         except Exception as e:
-            print(f"[main] {name}: 解析エラー → {e}")
+            print(f"[main] {name}: 検索クエリ生成エラー → {e}")
             continue
+
+        queries = research_plan.get("search_queries", [])
+        if queries:
+            print(f"[main] {name}: 背景・補足情報を収集中... ({len(queries)} queries)")
+        else:
+            print(f"[main] {name}: 追加Web調査なしで仮説を更新します")
+        related = researcher.research(queries)
+
+        print(f"[main] {name}: 検索結果を踏まえて営業仮説・レポートを作成中...")
+        try:
+            wait_for_gemini_slot()
+            analysis = analyzer.update_site_hypothesis(
+                name=name,
+                prev_hypothesis=item["prev_hypothesis"],
+                diff_text=item["diff_text"],
+                related=related,
+                today=today,
+            )
+        except Exception as e:
+            print(f"[main] {name}: 仮説更新エラー → {e}")
+            continue
+
+        analysis["search_queries"] = queries
 
         all_signals = analysis.get("signals", [])
         filtered = sorted(
@@ -213,32 +231,8 @@ def run():
             print(f"[main] {name}: 閾値以上のシグナルなし。通知・仮説更新をスキップします")
             continue
 
-        queries = analysis.get("search_queries", [])
-        if queries:
-            print(f"[main] {name}: 仮説補強用の関連情報を収集中... ({len(queries)} queries)")
-        else:
-            print(f"[main] {name}: 追加Web調査なしで仮説を更新します")
-        related = researcher.research(queries)
-
-        print(f"[main] {name}: 検索結果を踏まえて営業仮説を更新中...")
-        try:
-            wait_for_gemini_slot()
-            hypothesis_update = analyzer.update_site_hypothesis(
-                name=name,
-                prev_hypothesis=item["prev_hypothesis"],
-                summary=analysis.get("summary", ""),
-                signals=all_signals,
-                concerns=analysis.get("inferred_concerns", []),
-                related=related,
-                today=today,
-            )
-        except Exception as e:
-            print(f"[main] {name}: 仮説更新エラー → {e}")
-            continue
-
-        updated_md = hypothesis_update.get("updated_hypothesis_md")
+        updated_md = analysis.get("updated_hypothesis_md")
         if updated_md:
-            analysis["updated_hypothesis_md"] = updated_md
             save_hypothesis(name, updated_md)
             print(f"[main] {name}: 仮説を更新しました")
 
