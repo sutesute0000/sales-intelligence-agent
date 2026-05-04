@@ -1,0 +1,61 @@
+self_context:
+  company: "自社名を記入"
+  department: "担当部署名を記入"
+  role: |
+    担当部署の役割を記入します。
+    例: 顧客企業の公開情報を確認し、営業機会や提案仮説を整理する部署。
+  offerings:
+    - "提供サービス・商材 1"
+    - "提供サービス・商材 2"
+    - "提供サービス・商材 3"
+  stance: |
+    営業・提案時の基本姿勢を記入します。
+    例: 公開情報から確認できる事実と仮説を分け、相手先の課題確認から入る。
+  extra_context:
+    strengths:
+      - "営業機会の判定に使いたい自社の強み"
+      - "設備、運用体制、エリア、専門性、パートナー関係など"
+    priority_signals:
+      - "重要シグナルとして扱いたいニュースや事業イベント"
+      - "近い将来の営業接点につながりやすい顧客の動き"
+    opportunity_lenses:
+      - "商材 1: どのような課題・ニュースが出た時に提案余地があるか"
+      - "商材 2: どの部署に何を確認すべきか"
+    constraints:
+      - "守るべき制約、提案しない領域、注意すべき表現"
+      - "未確認情報を断定せず、確認質問として表現する"
+    discovery_questions:
+      - "営業担当が相手先に確認すべき質問"
+      - "今回の発表に伴い、追加で検討している課題はあるか"
+
+targets:
+  - name: "監視対象企業名"
+    url: "https://example.com/news/"
+
+gemini:
+  model: "gemini-2.5-flash"
+
+discord:
+  # DISCORD_WEBHOOK_URL は環境変数またはGitHub Secretsから読み込みます。
+
+scraper:
+  timeout: 30  # 1ページ取得時のタイムアウト秒数
+  user_agent: "Mozilla/5.0 (compatible; sales-intelligence-agent/1.0)"
+  max_pages: 20  # 1対象あたり最大何ページ取得するか
+  include_subdomains: true  # サブドメインも取得対象に含める
+  include_pdfs: true  # PDFも取得対象に含める
+  include_iframes: true  # iframe内のページも取得対象に含める
+
+signals:
+  min_score: 5  # この値未満のシグナルは通知対象から外す
+  hot_score: 8  # この値以上のシグナルを重要扱いにする
+
+hypothesis:
+  update_on_no_change: true  # ニュース差分がない日も仮説更新を行う
+
+state:
+  db_path: "state.db"  # 前回取得結果を保存するSQLite DB
+
+reports:
+  dir: "reports"  # 実行ごとのMarkdownレポート保存先
+  footer: "sales-intelligence-agent"  # Discord通知のフッター表示

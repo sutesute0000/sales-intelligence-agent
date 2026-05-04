@@ -1,0 +1,80 @@
+name: sales-intelligence-batch
+
+on:
+  schedule:
+    - cron: "0 22 * * *"  # 毎日 JST 07:00 (UTC 22:00 前日)
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: "実行対象名またはURLをカンマ区切りで指定。空なら全件。"
+        required: false
+        default: ""
+      batch_total:
+        description: "対象を何分割して実行するか。通常は1。"
+        required: false
+        default: "1"
+      batch_index:
+        description: "実行する分割番号。0始まり。batch_total=1なら0。"
+        required: false
+        default: "0"
+
+concurrency:
+  group: sales-intelligence-batch-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create private config
+        env:
+          SALES_INTEL_CONFIG_YAML: ${{ secrets.SALES_INTEL_CONFIG_YAML }}
+          SALES_INTEL_CONFIG_YAML_B64: ${{ secrets.SALES_INTEL_CONFIG_YAML_B64 }}
+        run: |
+          if [ -n "$SALES_INTEL_CONFIG_YAML_B64" ]; then
+            printf '%s' "$SALES_INTEL_CONFIG_YAML_B64" | base64 --decode > config.local.yaml
+          elif [ -n "$SALES_INTEL_CONFIG_YAML" ]; then
+            printf '%s' "$SALES_INTEL_CONFIG_YAML" > config.local.yaml
+          else
+            echo "SALES_INTEL_CONFIG_YAML_B64 or SALES_INTEL_CONFIG_YAML secret is required."
+            exit 1
+          fi
+
+      - name: Validate private config
+        env:
+          SALES_INTEL_CONFIG: config.local.yaml
+        run: |
+          python - <<'PY'
+          import os
+          import yaml
+
+          with open(os.environ["SALES_INTEL_CONFIG"], encoding="utf-8") as f:
+              config = yaml.safe_load(f)
+
+          for key in ("self_context", "targets", "gemini", "scraper", "state"):
+              if key not in config:
+                  raise SystemExit(f"Missing required config key: {key}")
+          if not config["targets"]:
+              raise SystemExit("Config targets is empty.")
+          print(f"Loaded private config with {len(config['targets'])} targets.")
+          PY
+
+      - name: Run
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SALES_INTEL_CONFIG: config.local.yaml
+          SALES_INTEL_TARGETS: ${{ github.event.inputs.targets }}
+          SALES_INTEL_BATCH_TOTAL: ${{ github.event.inputs.batch_total || '1' }}
+          SALES_INTEL_BATCH_INDEX: ${{ github.event.inputs.batch_index || '0' }}
+        run: python run_sales_intelligence.py

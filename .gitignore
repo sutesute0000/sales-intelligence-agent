@@ -1,0 +1,11 @@
+.env
+config.yaml
+config.local.yaml
+state.db
+__pycache__/
+*.pyc
+.venv/
+reports/
+.claude/
+hypotheses/
+.DS_Store
